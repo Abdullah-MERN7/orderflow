@@ -129,12 +129,12 @@ export const refreshController = async (req, res) => {
     await storedToken.save();
 
     const key = `user:${user._id}:tokenVersion`;
-const tokenVersion = await redisClient.get(key);
+    const tokenVersion = await redisClient.get(key);
 
-const accessToken = generateAccessToken({
-  ...user.toObject(),
-  tokenVersion: Number(tokenVersion),
-});
+    const accessToken = generateAccessToken({
+      ...user.toObject(),
+      tokenVersion: Number(tokenVersion),
+    });
     const newRefreshToken = generateRefreshToken(user);
 
     await RefreshToken.create({
@@ -196,8 +196,8 @@ export const logoutController = async (req, res) => {
     storedToken.revokedAt = new Date();
     await storedToken.save();
 
-    await incrementTokenVersion(storedToken.userId);
-    
+    // await incrementTokenVersion(storedToken.userId);
+
     return res.status(200).json({
       success: true,
       message: "Logged out successfully",
@@ -252,6 +252,31 @@ export const googleCallbackController = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: error.message,
+    });
+  }
+};
+
+export const logoutAllController = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    // 1. Redis version increment -> Saare active access tokens reject honge
+    await incrementTokenVersion(userId);
+
+    // 2. DB mein us user ke saare active refresh tokens revoke karo
+    await RefreshToken.updateMany(
+      { userId, revokedAt: null },
+      { revokedAt: new Date() }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Logged out from all devices successfully",
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to logout from all devices",
     });
   }
 };

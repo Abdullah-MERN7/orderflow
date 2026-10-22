@@ -9,6 +9,7 @@ import {
   logoutController,
   googleCallbackController,
   githubCallbackController,
+  logoutAllController,
 } from "../controllers/auth.controller.js";
 import { authenticate } from "../middlewares/auth.middleware.js";
 import { authorize } from "../middlewares/role.middleware.js";
@@ -51,6 +52,7 @@ router.get(
 router.post("/login", validate(loginSchema), loginController);
 router.post("/refresh", refreshController);
 router.post("/logout", logoutController);
+router.post("/logout-all", verifyAccessToken, logoutAllController);
 
 router.get(
   "/profile",
