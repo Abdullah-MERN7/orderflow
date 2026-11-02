@@ -52,7 +52,7 @@ router.get(
 router.post("/login", validate(loginSchema), loginController);
 router.post("/refresh", refreshController);
 router.post("/logout", logoutController);
-router.post("/logout-all", verifyAccessToken, logoutAllController);
+router.post("/logout-all", authenticate, logoutAllController);
 
 router.get(
   "/profile",
