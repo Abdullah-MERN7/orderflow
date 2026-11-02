@@ -1,5 +1,5 @@
 import Order from "../models/orderModel.js";
-import Product from "../models/productModel.j";
+import Product from "../models/product.model.js";
 
 export const createOrder = async (req, res) => {
   try {
@@ -66,6 +66,163 @@ export const createOrder = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to place order",
+    });
+  }
+};
+
+
+export const getMyOrders = async (req, res) => {
+  try {
+    const userId = req.user.userId || req.user._id;
+
+    const orders = await Order.find({ user: userId }).sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      count: orders.length,
+      data: orders,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch orders",
+    });
+  }
+};
+
+
+export const getOrderById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.userId || req.user._id;
+    const userRole = req.user.role;
+
+    const order = await Order.findById(id).populate("user", "name email");
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    // Security check: Customer sirf apna order dekh sakta hai
+    if (userRole !== "admin" && order.user._id.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized to view this order",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: order,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to fetch order",
+    });
+  }
+};
+
+
+export const updateOrderStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { orderStatus } = req.body;
+
+    const order = await Order.findById(id);
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    // Already delivered ya cancelled order modify na ho sake
+    if (order.orderStatus === "Delivered" || order.orderStatus === "Cancelled") {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot update order status once it is ${order.orderStatus}`,
+      });
+    }
+
+    // Status update
+    order.orderStatus = orderStatus;
+
+    // COD scenario: Delivery par payment automatically 'Paid' mark ho jaye
+    if (orderStatus === "Delivered" && order.paymentMethod === "COD") {
+      order.paymentStatus = "Paid";
+    }
+
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      message: `Order status updated to ${orderStatus}`,
+      data: order,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to update order status",
+    });
+  }
+};
+
+
+export const cancelOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.userId || req.user._id;
+    const userRole = req.user.role;
+
+    const order = await Order.findById(id);
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    // Security check: sirf owner ya admin cancel kar sake
+    if (userRole !== "admin" && order.user.toString() !== userId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized to cancel this order",
+      });
+    }
+
+    // Sirf Processing status wala order cancel ho sakta hai (Shipped/Delivered nahi)
+    if (order.orderStatus !== "Processing") {
+      return res.status(400).json({
+        success: false,
+        message: `Order cannot be cancelled because it is already ${order.orderStatus}`,
+      });
+    }
+
+    // Stock restore karo
+    for (const item of order.orderItems) {
+      await Product.findByIdAndUpdate(item.product, {
+        $inc: { stock: item.quantity },
+      });
+    }
+
+    order.orderStatus = "Cancelled";
+    await order.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Order cancelled successfully and stock restored",
+      data: order,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || "Failed to cancel order",
     });
   }
 };

@@ -20,3 +20,10 @@ export const createOrderSchema = Joi.object({
   }).required(),
   paymentMethod: Joi.string().valid("COD", "Card").default("COD"),
 });
+
+
+export const updateOrderStatusSchema = Joi.object({
+  orderStatus: Joi.string()
+    .valid("Processing", "Shipped", "Delivered", "Cancelled")
+    .required(),
+});
