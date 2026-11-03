@@ -1,6 +1,9 @@
 import Order from "../models/orderModel.js";
 import Product from "../models/product.model.js";
 
+import Stripe from "stripe";
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
 export const createOrder = async (req, res) => {
   try {
     const { orderItems, shippingAddress, paymentMethod } = req.body;
@@ -225,4 +228,67 @@ export const cancelOrder = async (req, res) => {
       message: error.message || "Failed to cancel order",
     });
   }
+};
+
+
+export const createPaymentIntent = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const order = await Order.findById(id);
+
+    if (!order) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    if (order.paymentStatus === "Paid") {
+      return res.status(400).json({ success: false, message: "Order is already paid" });
+    }
+
+    // Stripe smallest currency unit leta hai (cents / paisas) -> * 100
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: Math.round(order.totalAmount * 100),
+      currency: "usd", // ya "pkr" agar account support kare
+      metadata: { orderId: order._id.toString() },
+    });
+
+    return res.status(200).json({
+      success: true,
+      clientSecret: paymentIntent.client_secret,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const handleStripeWebhook = async (req, res) => {
+  const sig = req.headers["stripe-signature"];
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error(`Webhook signature verification failed: ${err.message}`);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // Jab user payment confirm kar leta hai
+  if (event.type === "payment_intent.succeeded") {
+    const paymentIntent = event.data.object;
+    const orderId = paymentIntent.metadata.orderId;
+
+    await Order.findByIdAndUpdate(orderId, {
+      paymentStatus: "Paid",
+      paymentResult: {
+        id: paymentIntent.id,
+        status: paymentIntent.status,
+      },
+    });
+    console.log(`Order ${orderId} marked as Paid via Stripe`);
+  }
+
+  return res.status(200).json({ received: true });
 };

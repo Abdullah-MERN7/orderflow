@@ -1,6 +1,5 @@
 import mongoose from "mongoose";
 
-// 1. Ek order ke andar multiple items (products) ka sub-schema
 const orderItemSchema = new mongoose.Schema({
   product: {
     type: mongoose.Schema.Types.ObjectId,
@@ -18,11 +17,10 @@ const orderItemSchema = new mongoose.Schema({
   },
   price: {
     type: Number,
-    required: true, // 🚨 Snapshotted price (order place hotay waqt ki price)
+    required: true,
   },
 });
 
-// 2. Main Order Schema
 const orderSchema = new mongoose.Schema(
   {
     user: {
@@ -79,13 +77,17 @@ const orderSchema = new mongoose.Schema(
       required: true,
       default: 0.0,
     },
+    paymentResult: {
+      id: { type: String },
+      status: { type: String },
+      email_address: { type: String },
+    },
   },
   {
-    timestamps: true, // createdAt aur updatedAt automatic handle honge
+    timestamps: true, 
   }
 );
 
-// Customer aur Admin ke orders sort/filter karne ke liye compound index
 orderSchema.index({ user: 1, createdAt: -1 });
 
 export default mongoose.model("Order", orderSchema);
