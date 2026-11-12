@@ -6,14 +6,16 @@ import {
   getMyOrders,
   getOrderById,
   updateOrderStatus,
+  getAllOrders
 } from "../controllers/orderController.js";
 import { authenticate } from "../middlewares/auth.middleware.js";
 import { validate } from "../middlewares/validate.middleware.js";
 import { createOrderSchema,updateOrderStatusSchema } from "../validations/orderValidation.js";
+import { authorize } from "../middlewares/role.middleware.js";
 
 const router = express.Router();
 
-
+router.get("/", authenticate, authorize("admin"), getAllOrders);
 router.get("/my-orders", authenticate, getMyOrders);
 router.post("/", authenticate, validate(createOrderSchema), createOrder);
 router.get("/webhook", (req, res) => {

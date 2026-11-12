@@ -138,26 +138,31 @@ export const updateOrderStatus = async (req, res) => {
     const order = await Order.findById(id);
 
     if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found",
-      });
+      return res.status(404).json({ success: false, message: "Order not found" });
     }
 
-    // Already delivered ya cancelled order modify na ho sake
-    if (order.orderStatus === "Delivered" || order.orderStatus === "Cancelled") {
+    if (order.orderStatus === "Cancelled" || order.orderStatus === "Delivered") {
       return res.status(400).json({
         success: false,
-        message: `Cannot update order status once it is ${order.orderStatus}`,
+        message: `Cannot change status of an order that is already ${order.orderStatus}`,
       });
     }
 
-    // Status update
+    if (
+      orderStatus === "Delivered" &&
+      order.paymentMethod === "Card" &&
+      order.paymentStatus !== "Completed"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot mark an unpaid Card order as Delivered.",
+      });
+    }
+
     order.orderStatus = orderStatus;
 
-    // COD scenario: Delivery par payment automatically 'Paid' mark ho jaye
     if (orderStatus === "Delivered" && order.paymentMethod === "COD") {
-      order.paymentStatus = "Paid";
+      order.paymentStatus = "Completed";
     }
 
     await order.save();
@@ -165,13 +170,10 @@ export const updateOrderStatus = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: `Order status updated to ${orderStatus}`,
-      data: order,
+      order,
     });
   } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: error.message || "Failed to update order status",
-    });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -240,6 +242,13 @@ export const createPaymentIntent = async (req, res) => {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
 
+    if (order.paymentMethod === "COD") {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot generate Stripe payment intent for Cash on Delivery orders.",
+      });
+    }
+
     if (order.paymentStatus === "Paid") {
       return res.status(400).json({ success: false, message: "Order is already paid" });
     }
@@ -275,20 +284,52 @@ export const handleStripeWebhook = async (req, res) => {
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  // Jab user payment confirm kar leta hai
   if (event.type === "payment_intent.succeeded") {
     const paymentIntent = event.data.object;
-    const orderId = paymentIntent.metadata.orderId;
+    const orderId = paymentIntent.metadata?.orderId;
 
-    await Order.findByIdAndUpdate(orderId, {
-      paymentStatus: "Paid",
-      paymentResult: {
-        id: paymentIntent.id,
-        status: paymentIntent.status,
-      },
-    });
-    console.log(`Order ${orderId} marked as Paid via Stripe`);
+    if (orderId) {
+      await Order.findByIdAndUpdate(orderId, {
+        paymentStatus: "Completed",
+        paymentResult: {
+          id: paymentIntent.id,
+          status: paymentIntent.status,
+        },
+      });
+      console.log(`Order ${orderId} marked as Completed via Stripe Webhook`);
+    }
   }
 
   return res.status(200).json({ received: true });
+};
+
+
+export const getAllOrders = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, orderStatus, paymentStatus } = req.query;
+
+    const filter = {};
+    if (orderStatus) filter.orderStatus = orderStatus;
+    if (paymentStatus) filter.paymentStatus = paymentStatus;
+
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const orders = await Order.find(filter)
+      .populate("user", "name email")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit));
+
+    const totalOrders = await Order.countDocuments(filter);
+
+    return res.status(200).json({
+      success: true,
+      totalOrders,
+      totalPages: Math.ceil(totalOrders / Number(limit)),
+      currentPage: Number(page),
+      orders,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
 };
