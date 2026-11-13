@@ -73,7 +73,6 @@ export const createOrder = async (req, res) => {
   }
 };
 
-
 export const getMyOrders = async (req, res) => {
   try {
     const userId = req.user.userId || req.user._id;
@@ -93,7 +92,6 @@ export const getMyOrders = async (req, res) => {
   }
 };
 
-
 export const getOrderById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -110,7 +108,10 @@ export const getOrderById = async (req, res) => {
     }
 
     // Security check: Customer sirf apna order dekh sakta hai
-    if (userRole !== "admin" && order.user._id.toString() !== userId.toString()) {
+    if (
+      userRole !== "admin" &&
+      order.user._id.toString() !== userId.toString()
+    ) {
       return res.status(403).json({
         success: false,
         message: "Not authorized to view this order",
@@ -129,7 +130,6 @@ export const getOrderById = async (req, res) => {
   }
 };
 
-
 export const updateOrderStatus = async (req, res) => {
   try {
     const { id } = req.params;
@@ -138,10 +138,15 @@ export const updateOrderStatus = async (req, res) => {
     const order = await Order.findById(id);
 
     if (!order) {
-      return res.status(404).json({ success: false, message: "Order not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
     }
 
-    if (order.orderStatus === "Cancelled" || order.orderStatus === "Delivered") {
+    if (
+      order.orderStatus === "Cancelled" ||
+      order.orderStatus === "Delivered"
+    ) {
       return res.status(400).json({
         success: false,
         message: `Cannot change status of an order that is already ${order.orderStatus}`,
@@ -177,39 +182,42 @@ export const updateOrderStatus = async (req, res) => {
   }
 };
 
-
 export const cancelOrder = async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.userId || req.user._id;
-    const userRole = req.user.role;
+    const isAdmin = req.user.role === "admin";
 
     const order = await Order.findById(id);
 
     if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found",
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
     }
 
-    // Security check: sirf owner ya admin cancel kar sake
-    if (userRole !== "admin" && order.user.toString() !== userId.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: "Not authorized to cancel this order",
-      });
+    if (order.user.toString() !== userId.toString() && !isAdmin) {
+      return res.status(403).json({ success: false, message: "Unauthorized" });
     }
 
-    // Sirf Processing status wala order cancel ho sakta hai (Shipped/Delivered nahi)
-    if (order.orderStatus !== "Processing") {
+    if (["Shipped", "Delivered", "Cancelled"].includes(order.orderStatus)) {
       return res.status(400).json({
         success: false,
-        message: `Order cannot be cancelled because it is already ${order.orderStatus}`,
+        message: `Cannot cancel order with status: ${order.orderStatus}`,
       });
     }
 
-    // Stock restore karo
+    if (
+      order.paymentMethod === "Card" &&
+      order.paymentStatus === "Completed" &&
+      order.paymentResult?.id
+    ) {
+      await stripe.refunds.create({
+        payment_intent: order.paymentResult.id,
+      });
+      order.paymentStatus = "Refunded";
+    }
+
     for (const item of order.orderItems) {
       await Product.findByIdAndUpdate(item.product, {
         $inc: { stock: item.quantity },
@@ -221,17 +229,16 @@ export const cancelOrder = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "Order cancelled successfully and stock restored",
-      data: order,
+      message:
+        order.paymentStatus === "Refunded"
+          ? "Order cancelled and payment refunded successfully"
+          : "Order cancelled and stock restored",
+      order,
     });
   } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: error.message || "Failed to cancel order",
-    });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
-
 
 export const createPaymentIntent = async (req, res) => {
   try {
@@ -239,18 +246,23 @@ export const createPaymentIntent = async (req, res) => {
     const order = await Order.findById(id);
 
     if (!order) {
-      return res.status(404).json({ success: false, message: "Order not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Order not found" });
     }
 
     if (order.paymentMethod === "COD") {
       return res.status(400).json({
         success: false,
-        message: "Cannot generate Stripe payment intent for Cash on Delivery orders.",
+        message:
+          "Cannot generate Stripe payment intent for Cash on Delivery orders.",
       });
     }
 
     if (order.paymentStatus === "Paid") {
-      return res.status(400).json({ success: false, message: "Order is already paid" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Order is already paid" });
     }
 
     // Stripe smallest currency unit leta hai (cents / paisas) -> * 100
@@ -277,32 +289,57 @@ export const handleStripeWebhook = async (req, res) => {
     event = stripe.webhooks.constructEvent(
       req.body,
       sig,
-      process.env.STRIPE_WEBHOOK_SECRET
+      process.env.STRIPE_WEBHOOK_SECRET,
     );
   } catch (err) {
     console.error(`Webhook signature verification failed: ${err.message}`);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  if (event.type === "payment_intent.succeeded") {
-    const paymentIntent = event.data.object;
-    const orderId = paymentIntent.metadata?.orderId;
+  const paymentIntent = event.data.object;
+  const orderId = paymentIntent.metadata?.orderId;
 
-    if (orderId) {
-      await Order.findByIdAndUpdate(orderId, {
-        paymentStatus: "Completed",
-        paymentResult: {
-          id: paymentIntent.id,
-          status: paymentIntent.status,
-        },
-      });
-      console.log(`Order ${orderId} marked as Completed via Stripe Webhook`);
-    }
+  if (!orderId) {
+    return res.status(200).json({ received: true });
   }
 
-  return res.status(200).json({ received: true });
-};
+  try {
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(200).json({ received: true });
+    }
 
+    // 1. Payment Succeeded Case
+    if (event.type === "payment_intent.succeeded") {
+      // Idempotency check: agar pehle se Completed hai toh dobara update na karo
+      if (order.paymentStatus !== "Completed") {
+        order.paymentStatus = "Completed";
+        order.paymentResult = {
+          id: paymentIntent.id,
+          status: paymentIntent.status,
+        };
+        await order.save();
+        console.log(`Order ${orderId} marked as Completed via Stripe Webhook`);
+      }
+    }
+
+    // 2. Payment Failed Case
+    if (event.type === "payment_intent.payment_failed") {
+      order.paymentStatus = "Failed";
+      order.paymentResult = {
+        id: paymentIntent.id,
+        status: paymentIntent.status,
+      };
+      await order.save();
+      console.log(`Payment failed for Order ${orderId}`);
+    }
+
+    return res.status(200).json({ received: true });
+  } catch (error) {
+    console.error("Webhook DB Update Error:", error.message);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 export const getAllOrders = async (req, res) => {
   try {
